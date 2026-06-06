@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { json } from 'express';
 import { chromium } from 'playwright-chromium';
 import { default as PQueue } from 'p-queue';
@@ -8,6 +9,7 @@ app.use(json());
 const PORT = process.env.PORT || 3000;
 const queue = new PQueue({ concurrency: 2 });
 let browser;
+const expectedSource = process.env.SOURCE;
 
 async function initBrowser() {
     console.log("Launching optimized shared Chromium instance...");
@@ -23,18 +25,87 @@ async function initBrowser() {
     });
 }
 
-app.post('/api/zerodha/login-token', async (req, res) => {
-    const { username, password, totp_secret, api_key } = req.body;
-    if (!username || !password || !totp_secret || !api_key) {
-        return res.status(400).json({ error: "Missing username, password, totp_secret, or api_key" });
+const authMiddleware = (req, res, next) => {
+    const requestSource = req.headers['source'];
+
+    if (!expectedSource || requestSource !== expectedSource) {
+        return res.status(401).json({ error: "Unauthorized" });
     }
-    try {
-        const result = await queue.add(() => executeZerodhaLogin(username, password, totp_secret, api_key));
-        return res.json(result);
-    } catch (error) {
-        console.error("Login automation failed:", error.message);
-        return res.status(500).json({ error: error.message });
+    next();
+};
+
+const tokenCache = new Map();
+const TOKEN_TTL_MS = 10 * 60 * 1000;
+
+app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
+    const { userid, username, password, totp_secret, api_key } = req.body;
+    if (!userid || userid < 1 || !username || !password || !totp_secret || !api_key) {
+        return res.status(400).json({ error: "Missing userid, username, password, totp_secret, or api_key" });
     }
+
+    const existingData = tokenCache.get(userid);
+    if (existingData && Date.now() <= existingData.expiresAt) {
+        if (existingData.status === "PENDING") {
+            return res.status(202).json({ message: "Token generation already in progress", status: "PENDING" });
+        } else if (existingData.status === "SUCCESS") {
+            return res.status(200).json({ message: "Token already generated", status: "SUCCESS" });
+        }
+    }
+
+    tokenCache.set(userid, {
+        status: "PENDING",
+        expiresAt: Date.now() + TOKEN_TTL_MS
+    });
+
+    queue.add(async () => {
+        try {
+            const result = await executeZerodhaLogin(username, password, totp_secret, api_key);
+
+            if (result && result.success && result.request_token) {
+                tokenCache.set(userid, {
+                    status: "SUCCESS",
+                    request_token: result.request_token,
+                    expiresAt: Date.now() + TOKEN_TTL_MS
+                });
+            }
+        } catch (error) {
+            console.error(`Login automation failed for user ${userid}:`, error.message);
+            tokenCache.set(userid, {
+                status: "ERROR",
+                error: error.message,
+                expiresAt: Date.now() + TOKEN_TTL_MS
+            });
+        }
+    });
+
+    return res.status(202).json({ message: "Token generation in progress", status: "PENDING" });
+});
+
+app.get('/api/zerodha/login-token', authMiddleware, (req, res) => {
+    const { userid } = req.query;
+
+    if (!userid || userid < 1) {
+        return res.status(400).json({ error: "Missing userid parameter" });
+    }
+
+    const tokenData = tokenCache.get(userid);
+
+    if (!tokenData) {
+        return res.status(404).json({ error: "Token not found" });
+    }
+
+    if (Date.now() > tokenData.expiresAt) {
+        tokenCache.delete(userid);
+        return res.status(404).json({ error: "Token expired" });
+    }
+
+    if (tokenData.status === "PENDING") {
+        return res.json({ status: "PENDING", message: "Token generation is still in progress" });
+    } else if (tokenData.status === "ERROR") {
+        return res.status(500).json({ status: "ERROR", error: tokenData.error });
+    }
+
+    return res.json({ status: "SUCCESS", userid: userid, request_token: tokenData.request_token });
 });
 
 async function executeZerodhaLogin(username, password, totpSecret, apiKey) {
