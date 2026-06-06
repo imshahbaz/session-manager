@@ -9,7 +9,8 @@ app.use(json());
 const PORT = process.env.PORT || 3000;
 const queue = new PQueue({ concurrency: 2 });
 let browser;
-const expectedSource = process.env.SOURCE;
+// Check both uppercase and lowercase depending on how it's written in .env
+const expectedSource = process.env.SOURCE || process.env.source;
 
 async function initBrowser() {
     console.log("Launching optimized shared Chromium instance...");
