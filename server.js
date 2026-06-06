@@ -43,7 +43,8 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
         return res.status(400).json({ error: "Missing userid, username, password, totp_secret, or api_key" });
     }
 
-    const existingData = tokenCache.get(userid);
+    const cacheKey = String(userid);
+    const existingData = tokenCache.get(cacheKey);
     if (existingData && Date.now() <= existingData.expiresAt) {
         if (existingData.status === "PENDING") {
             return res.status(202).json({ message: "Token generation already in progress", status: "PENDING" });
@@ -52,7 +53,7 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
         }
     }
 
-    tokenCache.set(userid, {
+    tokenCache.set(cacheKey, {
         status: "PENDING",
         expiresAt: Date.now() + TOKEN_TTL_MS
     });
@@ -62,7 +63,7 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
             const result = await executeZerodhaLogin(username, password, totp_secret, api_key);
 
             if (result && result.success && result.request_token) {
-                tokenCache.set(userid, {
+                tokenCache.set(cacheKey, {
                     status: "SUCCESS",
                     request_token: result.request_token,
                     expiresAt: Date.now() + TOKEN_TTL_MS
@@ -70,7 +71,7 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
             }
         } catch (error) {
             console.error(`Login automation failed for user ${userid}:`, error.message);
-            tokenCache.set(userid, {
+            tokenCache.set(cacheKey, {
                 status: "ERROR",
                 error: error.message,
                 expiresAt: Date.now() + TOKEN_TTL_MS
@@ -88,14 +89,15 @@ app.get('/api/zerodha/login-token', authMiddleware, (req, res) => {
         return res.status(400).json({ error: "Missing userid parameter" });
     }
 
-    const tokenData = tokenCache.get(userid);
+    const cacheKey = String(userid);
+    const tokenData = tokenCache.get(cacheKey);
 
     if (!tokenData) {
         return res.status(404).json({ error: "Token not found" });
     }
 
     if (Date.now() > tokenData.expiresAt) {
-        tokenCache.delete(userid);
+        tokenCache.delete(cacheKey);
         return res.status(404).json({ error: "Token expired" });
     }
 
