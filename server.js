@@ -106,25 +106,24 @@ async function executeZerodhaLogin(username, password, totpSecret, apiKey) {
         // Generate TOTP token
         const totpToken = await generateTOTP(totpSecret);
         await page.fill('.twofa-form input', totpToken);
-        // Kite often auto-submits when the 6th digit is typed. We attempt to click but ignore if it fails or navigates away.
-        await page.click('.twofa-form button[type="submit"]', { timeout: 3000 }).catch(() => { });
+        // Kite often auto-submits when the 6th digit is typed. 
+        // We fire a click asynchronously so it doesn't block if the page navigates away instantly.
+        page.click('.twofa-form button[type="submit"]').catch(() => { });
 
-        // Wait for navigation after TOTP
-        await page.waitForLoadState('domcontentloaded');
+        // Wait for redirect to the authorize page OR the final callback URL with request_token
+        await page.waitForURL(/.*(\/connect\/authorize|request_token=).*/, { timeout: 15000 });
 
         // If it lands on the /connect/authorize page, click the authorize button
         if (page.url().includes('/connect/authorize')) {
             try {
                 await page.waitForSelector('.button-orange', { timeout: 5000 });
-                await page.click('.button-orange');
+                page.click('.button-orange').catch(() => {});
+                // Wait for the final redirect
+                await page.waitForURL(/.*request_token=.*/, { timeout: 10000 });
             } catch (err) {
                 console.log("No authorize button found or click failed on authorize page.");
             }
         }
-
-        // 4. Extract Request Token / Validation URL
-        // Wait for redirect to happen where the 'request_token' parameter appears in the URL
-        await page.waitForURL(/.*request_token=.*/, { timeout: 10000 });
 
         const currentUrl = page.url();
         const urlParams = new URLSearchParams(new URL(currentUrl).search);
