@@ -22,7 +22,7 @@ async function initBrowser() {
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', // Critical for low-memory container environments
+            '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--disable-gpu'
         ]
@@ -30,7 +30,7 @@ async function initBrowser() {
 }
 
 // Microservice Route
-app.post('/api/login-token', async (req, res) => {
+app.post('/api/zerodha/login-token', async (req, res) => {
     const { username, password, totp_secret, api_key } = req.body;
 
     if (!username || !password || !totp_secret || !api_key) {
@@ -107,7 +107,7 @@ async function executeZerodhaLogin(username, password, totpSecret, apiKey) {
         const totpToken = await generateTOTP(totpSecret);
         await page.fill('.twofa-form input', totpToken);
         // Kite often auto-submits when the 6th digit is typed. We attempt to click but ignore if it fails or navigates away.
-        await page.click('.twofa-form button[type="submit"]', { timeout: 3000 }).catch(() => {});
+        await page.click('.twofa-form button[type="submit"]', { timeout: 3000 }).catch(() => { });
 
         // Wait for navigation after TOTP
         await page.waitForLoadState('domcontentloaded');
