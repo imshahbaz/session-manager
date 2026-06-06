@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     ca-certificates \
     procps \
+    dumb-init \
     libglib2.0-0 \
     libnss3 \
     libatk1.0-0 \
@@ -18,7 +19,7 @@ RUN apt-get update && apt-get install -y \
     libx11-6 \
     libxcomposite1 \
     libxdamage1 \
-    libext6 \
+    libxext6 \
     libxfixes3 \
     libxi6 \
     libxrandr2 \
@@ -42,5 +43,6 @@ COPY . .
 
 EXPOSE 3000
 
-# --init handles PID 1 issues to avoid process zombies leaking RAM
+# Using dumb-init handles PID 1 issues to avoid Chromium process zombies leaking RAM over time
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "server.js"]
