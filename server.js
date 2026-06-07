@@ -206,11 +206,7 @@ process.on('SIGTERM', async () => {
     process.exit(0);
 });
 
-initBrowser().then(() => {
-    app.listen(PORT, () => {
-        console.log(`Zerodha login service listening on port ${PORT}`);
-    });
-}).catch(err => {
-    console.error("Failed to start browser instance:", err);
-    process.exit(1);
-});
+
+app.listen(PORT, () => {
+    console.log(`Zerodha login service listening on port ${PORT}`);
+})
