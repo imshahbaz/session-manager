@@ -8,22 +8,25 @@ const app = express();
 app.use(json());
 const PORT = process.env.PORT || 3000;
 const queue = new PQueue({ concurrency: 2 });
-let browser;
-// Check both uppercase and lowercase depending on how it's written in .env
+let browser = null;
 const expectedSource = process.env.SOURCE || process.env.source;
 
-async function initBrowser() {
-    console.log("Launching optimized shared Chromium instance...");
-    browser = await chromium.launch({
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu'
-        ]
-    });
+async function getBrowserInstance() {
+    if (!browser) {
+        console.log("🚀 Launching optimized shared Chromium instance on-demand...");
+        browser = await chromium.launch({
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--single-process'
+            ]
+        });
+    }
+    return browser;
 }
 
 const authMiddleware = (req, res, next) => {
@@ -37,6 +40,8 @@ const authMiddleware = (req, res, next) => {
 
 const tokenCache = new Map();
 const TOKEN_TTL_MS = 10 * 60 * 1000;
+
+app.get('/health', (req, res) => res.status(200).send("OK"));
 
 app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
     const { userid, username, password, totp_secret, api_key } = req.body;
@@ -61,7 +66,8 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 
     queue.add(async () => {
         try {
-            const result = await executeZerodhaLogin(username, password, totp_secret, api_key);
+            const activeBrowser = await getBrowserInstance();
+            const result = await executeZerodhaLogin(activeBrowser, username, password, totp_secret, api_key);
 
             if (result && result.success && result.request_token) {
                 tokenCache.set(cacheKey, {
@@ -111,8 +117,8 @@ app.get('/api/zerodha/login-token', authMiddleware, (req, res) => {
     return res.json({ status: "SUCCESS", userid: userid, request_token: tokenData.request_token });
 });
 
-async function executeZerodhaLogin(username, password, totpSecret, apiKey) {
-    const context = await browser.newContext({
+async function executeZerodhaLogin(activeBrowser, username, password, totpSecret, apiKey) {
+    const context = await activeBrowser.newContext({
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
 
