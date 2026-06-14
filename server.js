@@ -72,8 +72,9 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
     res.status(202).json({ message: "Token generation task queued successfully", status: "PENDING" });
 
     queue.add(async () => {
+        let activeBrowser = null;
         try {
-            const activeBrowser = await getBrowserInstance();
+            activeBrowser = await getBrowserInstance();
             const result = await executeZerodhaLogin(activeBrowser, username, password, totp_secret, api_key);
 
             if (result && result.success && result.request_token) {
