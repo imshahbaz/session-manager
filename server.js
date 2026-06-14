@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 const JAVA_BACKEND_URL = process.env.JAVA_BACKEND_URL;
 const expectedSource = process.env.SOURCE || process.env.source;
 
-const queue = new PQueue({ concurrency: 2 });
+const queue = new PQueue({ concurrency: 1 });
 const inFlightRequests = new Set();
 let browser = null;
 
@@ -27,8 +27,11 @@ async function getBrowserInstance() {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--no-first-run',
+                '--no-zygote',
                 '--single-process',
-                '--disable-gpu'
+                '--disable-extensions'
             ]
         });
     }
@@ -50,7 +53,7 @@ app.get('/health', (req, res) => res.status(200).send("OK"));
 // Trigger Automation Login Endpoint
 app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
     const { userid, username, password, totp_secret, api_key } = req.body;
-    
+
     if (!userid || userid < 1 || !username || !password || !totp_secret || !api_key) {
         return res.status(400).json({ error: "Missing userid, username, password, totp_secret, or api_key" });
     }
@@ -59,9 +62,9 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 
     if (inFlightRequests.has(cacheKey)) {
         console.log(`⚠️ Request blocked: Automation is already running for user ${userid}`);
-        return res.status(202).json({ 
-            message: "Token generation already in progress", 
-            status: "PENDING" 
+        return res.status(202).json({
+            message: "Token generation already in progress",
+            status: "PENDING"
         });
     }
 
@@ -76,7 +79,7 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 
             if (result && result.success && result.request_token) {
                 console.log(`✅ Automation succeeded for user ${userid}. Dispatching callback payload...`);
-                
+
                 await axios.post(`${JAVA_BACKEND_URL}/api/session-manager/zerodha-callback`, {
                     status: "SUCCESS",
                     message: "Token generated successfully via automation",
