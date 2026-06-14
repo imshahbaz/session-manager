@@ -4,6 +4,7 @@ import { chromium } from 'playwright-chromium';
 import { default as PQueue } from 'p-queue';
 import { TOTP } from 'totp-generator';
 import axios from 'axios';
+import os from 'os';
 
 const app = express();
 app.use(json());
@@ -16,7 +17,19 @@ const queue = new PQueue({ concurrency: 1 });
 const inFlightRequests = new Set();
 let browser = null;
 
-// Optimize shared Chromium launch flags to minimize footprint and bot detection
+async function waitUntilMemoryIsReady(minFreeMemoryMB = 180) {
+    const minBytes = minFreeMemoryMB * 1024 * 1024;
+    let attempts = 0;
+    
+    while (os.freemem() < minBytes) {
+        attempts++;
+        if (attempts % 10 === 0) {
+            console.log(`⏳ Waiting for Render to reclaim memory. Current free: ${(os.freemem() / (1024 * 1024)).toFixed(1)}MB / Target: ${minFreeMemoryMB}MB`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+}
+
 async function getBrowserInstance() {
     if (!browser) {
         console.log("🚀 Launching optimized shared Chromium instance on-demand...");
@@ -74,6 +87,7 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
     queue.add(async () => {
         let activeBrowser = null;
         try {
+            await waitUntilMemoryIsReady(180);
             activeBrowser = await getBrowserInstance();
             const result = await executeZerodhaLogin(activeBrowser, username, password, totp_secret, api_key);
 
