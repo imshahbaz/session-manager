@@ -13,6 +13,7 @@ const JAVA_BACKEND_URL = process.env.JAVA_BACKEND_URL;
 const expectedSource = process.env.SOURCE || process.env.source;
 
 const queue = new PQueue({ concurrency: 2 });
+const inFlightRequests = new Set();
 let browser = null;
 
 // Optimize shared Chromium launch flags to minimize footprint and bot detection
@@ -54,10 +55,20 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
         return res.status(400).json({ error: "Missing userid, username, password, totp_secret, or api_key" });
     }
 
-    // Acknowledge the request immediately to release your Feign HTTP execution thread
+    const cacheKey = String(userid);
+
+    if (inFlightRequests.has(cacheKey)) {
+        console.log(`⚠️ Request blocked: Automation is already running for user ${userid}`);
+        return res.status(202).json({ 
+            message: "Token generation already in progress", 
+            status: "PENDING" 
+        });
+    }
+
+    inFlightRequests.add(cacheKey);
+
     res.status(202).json({ message: "Token generation task queued successfully", status: "PENDING" });
 
-    // Handle heavy browser automation out-of-band asynchronously in the background queue
     queue.add(async () => {
         try {
             const activeBrowser = await getBrowserInstance();
@@ -66,7 +77,6 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
             if (result && result.success && result.request_token) {
                 console.log(`✅ Automation succeeded for user ${userid}. Dispatching callback payload...`);
                 
-                // Matches your Java ZerodhaLoginResponseDTO structure for SUCCESS status
                 await axios.post(`${JAVA_BACKEND_URL}/api/session-manager/zerodha-callback`, {
                     status: "SUCCESS",
                     message: "Token generated successfully via automation",
@@ -81,7 +91,6 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
             const errMsg = error.message || "";
             console.error(`❌ Login automation failed for user ${userid}:`, errMsg);
 
-            // Matches your Java ZerodhaLoginResponseDTO structure for ERROR status
             await axios.post(`${JAVA_BACKEND_URL}/api/session-manager/zerodha-callback`, {
                 status: "ERROR",
                 message: "Automation workflow encountered an exception",
@@ -94,10 +103,13 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
                 console.error(`Failed to deliver failure callback payload to Java app:`, err.message);
             });
         }
+        finally {
+            inFlightRequests.delete(cacheKey);
+            console.log(`🔓 Released lock for user ${userid}. Ready for next request.`);
+        }
     });
 });
 
-// Playwright Automation Logic
 async function executeZerodhaLogin(activeBrowser, username, password, totpSecret, apiKey) {
     const context = await activeBrowser.newContext({
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -105,7 +117,6 @@ async function executeZerodhaLogin(activeBrowser, username, password, totpSecret
 
     const page = await context.newPage();
     try {
-        // Intercept and drop media assets to speed up performance and reduce memory usage on Render
         await page.route('**/*', (route) => {
             const type = route.request().resourceType();
             if (['image', 'media'].includes(type)) {
@@ -127,12 +138,10 @@ async function executeZerodhaLogin(activeBrowser, username, password, totpSecret
             throw new Error(`Could not locate login elements. Is your API key correct?`);
         }
 
-        // Phase 1: Credentials Input
         await page.fill('#userid', username);
         await page.fill('#password', password);
         await page.click('button[type="submit"]');
 
-        // Catch bad credentials early before moving to 2FA step
         try {
             const result = await Promise.race([
                 page.waitForSelector('.twofa-form input', { timeout: 10000 }).then(() => 'totp'),
@@ -149,13 +158,11 @@ async function executeZerodhaLogin(activeBrowser, username, password, totpSecret
             throw new Error(`Failed passing step one credentials layer. Error: ${e.message}`);
         }
 
-        // Phase 2: TOTP Generation and Verification
         const totpToken = await generateTOTP(totpSecret);
         await page.fill('.twofa-form input', totpToken);
         page.click('.twofa-form button[type="submit"]').catch(() => { });
         await page.waitForURL(/.*(\/connect\/authorize|request_token=).*/, { timeout: 15000 });
 
-        // Handle third-party application approval redirects
         if (page.url().includes('/connect/authorize')) {
             try {
                 await page.waitForSelector('.button-orange', { timeout: 5000 });
@@ -180,14 +187,12 @@ async function executeZerodhaLogin(activeBrowser, username, password, totpSecret
     }
 }
 
-// Helper utility to compute base32 TOTP configurations safely
 async function generateTOTP(secret) {
     const cleanSecret = secret.replace(/\s+/g, '');
     const { otp } = await TOTP.generate(cleanSecret);
     return otp;
 }
 
-// Clean browser process termination hooks on container scale down or restart
 process.on('SIGTERM', async () => {
     console.log("Received termination signal. Closing engine instances...");
     if (browser) await browser.close();
