@@ -15,8 +15,6 @@
     "axios": "^1.17.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "otplib": "^13.4.1",
-    "p-queue": "^9.3.0",
     "playwright-chromium": "^1.60.0",
     "totp-generator": "^2.0.1"
   }
