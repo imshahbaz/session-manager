@@ -30,7 +30,6 @@ async function getBrowserInstance() {
                 '--disable-gpu',
                 '--no-first-run',
                 '--no-zygote',
-                '--single-process',
                 '--disable-extensions'
             ]
         });
@@ -107,6 +106,14 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
             });
         }
         finally {
+            if (activeBrowser) {
+                try {
+                    await activeBrowser.close();
+                    console.log(`🧹 Cleanly closed Chromium process space for user ${userid}`);
+                } catch (closeError) {
+                    console.error("Error closing browser process:", closeError.message);
+                }
+            }
             inFlightRequests.delete(cacheKey);
             console.log(`🔓 Released lock for user ${userid}. Ready for next request.`);
         }
