@@ -1,9 +1,12 @@
 // server.js
 import 'dotenv/config';
 import express, { json } from 'express';
-import { fork } from 'child_process'; // Native Node module to fork independent engine threads
+import { fork } from 'child_process';
+import httpProxy from 'http-proxy';
 
 const app = express();
+const proxy = httpProxy.createProxyServer({});
+const VPS_URL = process.env.VPS_URL || 'http://YOUR_WEBEYESOFT_VPS_IP:80';
 app.use(json());
 
 const PORT = process.env.PORT || 3000;
@@ -39,10 +42,8 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 
     activeWorkers.add(userKey);
 
-    // Reply instantly to free the Spring Boot HTTP pipeline
     res.status(202).json({ message: "Task passed to decoupled child process engine", status: "PENDING" });
 
-    // Fork an independent OS child thread (Allocated outside the primary Node heap)
     const child = fork('./worker.js', [
         userid, 
         username, 
@@ -53,11 +54,30 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
         expectedSource
     ]);
 
-    // Cleanup reference keys when child process exits
     child.on('exit', () => {
         activeWorkers.delete(userKey);
         console.log(`🧹 Host kernel completely reclaimed memory structures for user ${userid}`);
     });
 });
 
-app.listen(PORT, () => console.log(`Decoupled Process Automation Router active on port ${PORT}`));
+app.use((req, res) => {
+    console.log(`🔀 No local match on Render. Mirroring ${req.method} ${req.url} to VPS...`);
+    
+    let proxyOptions = { target: VPS_URL };
+    
+    if (req.body && Object.keys(req.body).length > 0) {
+        proxyOptions.buffer = {
+            pipe: (dest) => {
+                dest.write(JSON.stringify(req.body));
+                dest.end();
+            }
+        };
+    }
+
+    proxy.web(req, res, proxyOptions, (error) => {
+        console.error('❌ Passthrough Proxy Error:', error.message);
+        res.status(502).send('VPS backend target is currently unreachable.');
+    });
+});
+
+app.listen(PORT, () => console.log(`Session manager active on port ${PORT}`));
