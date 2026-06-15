@@ -62,24 +62,35 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
     });
 });
 
-app.use((req, res) => {
-    console.log(`🔀 No local match on Render. Mirroring ${req.method} ${req.url} to VPS...`);
-    
-    let proxyOptions = { target: JAVA_BACKEND_URL };
-    
-    if (req.body && Object.keys(req.body).length > 0) {
-        proxyOptions.buffer = {
-            pipe: (dest) => {
-                dest.write(JSON.stringify(req.body));
-                dest.end();
-            }
-        };
-    }
+app.use((req, res, next) => {
+    if (req.url.startsWith('/api')) {
+        console.log(`🔀 No local match on Render. Mirroring ${req.method} ${req.url} to VPS...`);
+        
+        let proxyOptions = { target: JAVA_BACKEND_URL };
+        
+        if (req.body && Object.keys(req.body).length > 0) {
+            const bodyData = JSON.stringify(req.body);
+            req.headers['content-length'] = Buffer.byteLength(bodyData);
+            proxyOptions.buffer = {
+                pipe: (dest) => {
+                    dest.write(bodyData);
+                    dest.end();
+                }
+            };
+        }
 
-    proxy.web(req, res, proxyOptions, (error) => {
-        console.error('❌ Passthrough Proxy Error:', error.message);
-        res.status(502).send('VPS backend target is currently unreachable.');
-    });
+        return proxy.web(req, res, proxyOptions, (error) => {
+            console.error('❌ Passthrough Proxy Error:', error.message);
+            if (!res.headersSent) {
+                res.status(502).send('VPS backend target is currently unreachable.');
+            }
+        });
+    }
+    next();
+});
+
+app.use((req, res) => {
+    res.status(404).json({ error: "Route not found on Render Gateway" });
 });
 
 app.listen(PORT, () => console.log(`Session manager active on port ${PORT}`));
