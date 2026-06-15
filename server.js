@@ -5,8 +5,10 @@ import { fork } from 'child_process';
 import httpProxy from 'http-proxy';
 
 const app = express();
-const proxy = httpProxy.createProxyServer({});
-const VPS_URL = process.env.VPS_URL || 'http://YOUR_WEBEYESOFT_VPS_IP:80';
+const proxy = httpProxy.createProxyServer({
+    secure: false,       
+    changeOrigin: true    
+});
 app.use(json());
 
 const PORT = process.env.PORT || 3000;
@@ -63,7 +65,7 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 app.use((req, res) => {
     console.log(`🔀 No local match on Render. Mirroring ${req.method} ${req.url} to VPS...`);
     
-    let proxyOptions = { target: VPS_URL };
+    let proxyOptions = { target: JAVA_BACKEND_URL };
     
     if (req.body && Object.keys(req.body).length > 0) {
         proxyOptions.buffer = {
