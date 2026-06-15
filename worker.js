@@ -20,7 +20,7 @@ async function runWorker() {
                 '--no-first-run',
                 '--no-zygote',
                 '--disable-extensions',
-                '--js-flags="--max-old-space-size=128"' // Keep internal engine memory footprint tight
+                '--js-flags="--max-old-space-size=128"'
             ]
         });
 
