@@ -4,6 +4,13 @@ import express, { json } from 'express';
 import { fork } from 'child_process';
 import httpProxy from 'http-proxy';
 
+const EXCLUDED_LOG_URIS = new Set([
+    "/api/user/fcm-token",
+    "/api/auth/me",
+    "/health",
+    "/api/angelone/ltp"
+]);
+
 const app = express();
 const proxy = httpProxy.createProxyServer({
     secure: false,       
@@ -64,8 +71,9 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 
 app.use((req, res, next) => {
     if (req.url.startsWith('/api')) {
-        console.log(`🔀 No local match on Render. Mirroring ${req.method} ${req.url} to VPS...`);
-        
+        const startTime = Date.now();
+        const { method, url: rawUrl } = req;
+        const cleanPath = rawUrl.split('?')[0];
         let proxyOptions = { target: JAVA_BACKEND_URL };
         
         if (req.body && Object.keys(req.body).length > 0) {
@@ -78,6 +86,17 @@ app.use((req, res, next) => {
                 }
             };
         }
+
+        res.once('finish', () => {
+            const duration = Date.now() - startTime;
+            const isExcluded = EXCLUDED_LOG_URIS.has(cleanPath) || 
+                               cleanPath.startsWith("/static/") || 
+                               cleanPath.endsWith(".ico");
+
+            if (!isExcluded) {
+                console.log(`[${method}] ${res.statusCode} | ${duration} ms | ${rawUrl}`);
+            }
+        });
 
         return proxy.web(req, res, proxyOptions, (error) => {
             console.error('❌ Passthrough Proxy Error:', error.message);
