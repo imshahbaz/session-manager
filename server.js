@@ -3,6 +3,8 @@ import 'dotenv/config';
 import express, { json } from 'express';
 import { fork } from 'child_process';
 import httpProxy from 'http-proxy';
+import http from 'http';
+import https from 'https';
 
 const EXCLUDED_LOG_URIS = new Set([
     "/api/user/fcm-token",
