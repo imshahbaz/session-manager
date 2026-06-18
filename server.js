@@ -12,11 +12,17 @@ const EXCLUDED_LOG_URIS = new Set([
 ]);
 
 const app = express();
-const keepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 100 });
+const keepAliveHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 });
+const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 100 });
+
+const targetAgent = JAVA_BACKEND_URL.startsWith('https') 
+    ? keepAliveHttpsAgent 
+    : keepAliveHttpAgent;
+
 const proxy = httpProxy.createProxyServer({
     secure: false,       
     changeOrigin: true,
-    agent: keepAliveAgent
+    agent: targetAgent
 });
 app.use(json());
 
