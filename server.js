@@ -14,6 +14,9 @@ const EXCLUDED_LOG_URIS = new Set([
 ]);
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+const JAVA_BACKEND_URL = process.env.JAVA_BACKEND_URL;
+const expectedSource = process.env.SOURCE || process.env.source;
 const keepAliveHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 });
 const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 100 });
 
@@ -26,13 +29,9 @@ const proxy = httpProxy.createProxyServer({
     changeOrigin: true,
     agent: targetAgent
 });
+
 app.use(json());
 
-const PORT = process.env.PORT || 3000;
-const JAVA_BACKEND_URL = process.env.JAVA_BACKEND_URL;
-const expectedSource = process.env.SOURCE || process.env.source;
-
-// Track active users to prevent multi-trigger floods
 const activeWorkers = new Set();
 
 const authMiddleware = (req, res, next) => {
