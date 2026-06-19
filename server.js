@@ -5,6 +5,7 @@ import { fork } from 'child_process';
 import httpProxy from 'http-proxy';
 import http from 'http';
 import https from 'https';
+import async from 'async'; // 🎯 Handled via npm install async
 
 const EXCLUDED_LOG_URIS = new Set([
     "/api/user/fcm-token",
@@ -32,7 +33,29 @@ const proxy = httpProxy.createProxyServer({
 
 app.use(json());
 
+// 🎯 Reverted to your original tracking Set
 const activeWorkers = new Set();
+const MAX_CONCURRENT_BROWSERS = 1; 
+
+// 🎯 Cleaned Queue Engine: Removed deferred response logic to prevent header crashes
+const loginQueue = async.queue(async (task) => {
+    const { userid, args } = task;
+
+    console.log(`🚀 [Queue Engine] Spawning isolated browser worker for user ${userid}. Current Queue Depth: ${loginQueue.length()}`);
+
+    return new Promise((resolve) => {
+        const child = fork('./worker.js', args);
+
+        child.on('exit', (code) => {
+            // Remove the user from the active duplicate tracker map once the worker completely exits
+            activeWorkers.delete(String(userid));
+            console.log(`🧹 [Queue Engine] Host kernel reclaimed memory structures for user ${userid} (Exit code: ${code})`);
+            
+            // Notify queue engine that the hardware slot is clear for the next task
+            resolve();
+        });
+    });
+}, MAX_CONCURRENT_BROWSERS);
 
 const authMiddleware = (req, res, next) => {
     const requestSource = req.headers['source'];
@@ -53,6 +76,7 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 
     const userKey = String(userid);
 
+    // 🎯 Checks if automation is already running or queued for this exact user
     if (activeWorkers.has(userKey)) {
         console.log(`⚠️ Request dropped: Automation already running for user ${userid}`);
         return res.status(202).json({ message: "Token generation already in progress", status: "PENDING" });
@@ -60,24 +84,34 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
 
     activeWorkers.add(userKey);
 
+    // 🎯 Instantly send back your exact original response to Spring Boot
     res.status(202).json({ message: "Task passed to decoupled child process engine", status: "PENDING" });
 
-    const child = fork('./worker.js', [
-        userid, 
-        username, 
-        password, 
-        totp_secret, 
-        api_key, 
-        JAVA_BACKEND_URL, 
-        expectedSource
-    ]);
+    const task = {
+        userid: userid,
+        args: [
+            userid, 
+            username, 
+            password, 
+            totp_secret, 
+            api_key, 
+            JAVA_BACKEND_URL, 
+            expectedSource
+        ]
+    };
 
-    child.on('exit', () => {
-        activeWorkers.delete(userKey);
-        console.log(`🧹 Host kernel completely reclaimed memory structures for user ${userid}`);
+    // Push into memory-safe queue line execution array
+    loginQueue.push(task, (err) => {
+        if (err) {
+            console.error(`❌ Queue pipeline failure handling task for user ${userid}:`, err);
+            activeWorkers.delete(userKey);
+        }
     });
+
+    console.log(`📥 [Queue Engine] Task queued for user ${userid}. Position in queue line: ${loginQueue.length()}`);
 });
 
+// Passthrough reverse routing engine configuration
 app.use((req, res, next) => {
     if (req.url.startsWith('/api')) {
         const startTime = Date.now();
@@ -121,4 +155,4 @@ app.use((req, res) => {
     res.status(404).json({ error: "Route not found on Render Gateway" });
 });
 
-app.listen(PORT, () => console.log(`Session manager active on port ${PORT}`));
+app.listen(PORT, () => console.log(`Session manager active on port ${PORT} with MAX_CONCURRENT_BROWSERS=${MAX_CONCURRENT_BROWSERS}`));

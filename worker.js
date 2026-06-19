@@ -105,7 +105,7 @@ async function runWorker() {
         if (browser) {
             await browser.close();
         }
-        process.exit(0); // Closes the OS thread cleanly, instantly reclaiming 100% of its RAM
+        process.exit(0);
     }
 }
 
