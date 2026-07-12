@@ -1,5 +1,5 @@
-# --- Step 1: Compile the fast Go binary ---
-FROM golang:1.22-alpine AS builder
+# --- Step 1: Compile the fast Go binary using a modern Go release ---
+FROM golang:alpine AS builder
 WORKDIR /app
 
 # Copy dependency records first to leverage Docker caching layers
@@ -11,7 +11,7 @@ COPY main.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o gateway main.go
 
 # --- Step 2: Package into a tiny, secure runtime container ---
-FROM alpine:3.19
+FROM alpine:latest
 WORKDIR /app
 
 # Install basic security certificates so the proxy can talk to HTTPS backends safely
