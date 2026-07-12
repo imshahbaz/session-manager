@@ -21,12 +21,12 @@ const expectedSource = process.env.SOURCE || process.env.source;
 const keepAliveHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 });
 const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 100 });
 
-const targetAgent = JAVA_BACKEND_URL.startsWith('https') 
-    ? keepAliveHttpsAgent 
+const targetAgent = JAVA_BACKEND_URL.startsWith('https')
+    ? keepAliveHttpsAgent
     : keepAliveHttpAgent;
 
 const proxy = httpProxy.createProxyServer({
-    secure: false,       
+    secure: false,
     changeOrigin: true,
     agent: targetAgent
 });
@@ -35,7 +35,7 @@ app.use(json());
 
 // 🎯 Reverted to your original tracking Set
 const activeWorkers = new Set();
-const MAX_CONCURRENT_BROWSERS = 1; 
+const MAX_CONCURRENT_BROWSERS = 1;
 
 // 🎯 Cleaned Queue Engine: Removed deferred response logic to prevent header crashes
 const loginQueue = async.queue(async (task) => {
@@ -50,7 +50,7 @@ const loginQueue = async.queue(async (task) => {
             // Remove the user from the active duplicate tracker map once the worker completely exits
             activeWorkers.delete(String(userid));
             console.log(`🧹 [Queue Engine] Host kernel reclaimed memory structures for user ${userid} (Exit code: ${code})`);
-            
+
             // Notify queue engine that the hardware slot is clear for the next task
             resolve();
         });
@@ -90,12 +90,12 @@ app.post('/api/zerodha/login-token', authMiddleware, (req, res) => {
     const task = {
         userid: userid,
         args: [
-            userid, 
-            username, 
-            password, 
-            totp_secret, 
-            api_key, 
-            JAVA_BACKEND_URL, 
+            userid,
+            username,
+            password,
+            totp_secret,
+            api_key,
+            JAVA_BACKEND_URL,
             expectedSource
         ]
     };
@@ -117,24 +117,13 @@ app.use((req, res, next) => {
         const startTime = Date.now();
         const { method, url: rawUrl } = req;
         const cleanPath = rawUrl.split('?')[0];
-        let proxyOptions = { target: JAVA_BACKEND_URL };
-        
-        if (req.body && Object.keys(req.body).length > 0) {
-            const bodyData = JSON.stringify(req.body);
-            req.headers['content-length'] = Buffer.byteLength(bodyData);
-            proxyOptions.buffer = {
-                pipe: (dest) => {
-                    dest.write(bodyData);
-                    dest.end();
-                }
-            };
-        }
+        let proxyOptions = { target: JAVA_BACKEND_URL, changeOrigin: true };
 
         res.once('finish', () => {
             const duration = Date.now() - startTime;
-            const isExcluded = EXCLUDED_LOG_URIS.has(cleanPath) || 
-                               cleanPath.startsWith("/static/") || 
-                               cleanPath.endsWith(".ico");
+            const isExcluded = EXCLUDED_LOG_URIS.has(cleanPath) ||
+                cleanPath.startsWith("/static/") ||
+                cleanPath.endsWith(".ico");
 
             if (!isExcluded) {
                 console.log(`[${method}] ${res.statusCode} | ${duration} ms | ${rawUrl}`);
@@ -149,6 +138,22 @@ app.use((req, res, next) => {
         });
     }
     next();
+});
+
+proxy.on('proxyReq', function (proxyReq, req, res, options) {
+    if (req.body && Object.keys(req.body).length > 0) {
+        const bodyData = JSON.stringify(req.body);
+        proxyReq.setHeader('Content-Type', 'application/json');
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+        proxyReq.write(bodyData);
+    }
+});
+
+// 🌟 FIX: Global Inbound Response Handler (Ensures phone receives auth session cookies)
+proxy.on('proxyRes', function (proxyRes, req, res) {
+    if (proxyRes.headers['set-cookie']) {
+        res.setHeader('Set-Cookie', proxyRes.headers['set-cookie']);
+    }
 });
 
 app.use((req, res) => {
