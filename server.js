@@ -117,7 +117,7 @@ app.use((req, res, next) => {
         const startTime = Date.now();
         const { method, url: rawUrl } = req;
         const cleanPath = rawUrl.split('?')[0];
-        let proxyOptions = { target: JAVA_BACKEND_URL, changeOrigin: true };
+        let proxyOptions = { target: JAVA_BACKEND_URL };
 
         res.once('finish', () => {
             const duration = Date.now() - startTime;
