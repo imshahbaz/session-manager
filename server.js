@@ -117,7 +117,24 @@ app.use((req, res, next) => {
         const startTime = Date.now();
         const { method, url: rawUrl } = req;
         const cleanPath = rawUrl.split('?')[0];
-        let proxyOptions = { target: JAVA_BACKEND_URL };
+
+        let proxyOptions = {
+            target: JAVA_BACKEND_URL,
+            changeOrigin: true
+        };
+
+        // 🌟 Re-stream parsed JSON without calling dest.end() prematurely
+        if (req.body && Object.keys(req.body).length > 0) {
+            const bodyData = JSON.stringify(req.body);
+            req.headers['content-length'] = Buffer.byteLength(bodyData);
+            req.headers['content-type'] = 'application/json';
+
+            proxyOptions.buffer = {
+                pipe: (dest) => {
+                    dest.write(bodyData);
+                }
+            };
+        }
 
         res.once('finish', () => {
             const duration = Date.now() - startTime;
@@ -142,18 +159,13 @@ app.use((req, res, next) => {
 
 proxy.on('proxyReq', function (proxyReq, req, res, options) {
     if (req.body && Object.keys(req.body).length > 0) {
-        const bodyData = JSON.stringify(req.body);
         proxyReq.setHeader('Content-Type', 'application/json');
-        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
-        proxyReq.write(bodyData);
     }
 });
 
 proxy.on('proxyRes', function (proxyRes, req, res) {
     if (proxyRes.headers['set-cookie']) {
-        proxyRes.headers['set-cookie'] = proxyRes.headers['set-cookie'].map(cookie =>
-            cookie.replace(/Domain=[^;]+;?\s*/gi, '')
-        );
+        res.setHeader('Set-Cookie', proxyRes.headers['set-cookie']);
     }
 });
 
