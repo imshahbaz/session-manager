@@ -123,7 +123,7 @@ app.use((req, res, next) => {
             changeOrigin: true
         };
 
-        // 🌟 Re-stream parsed JSON without calling dest.end() prematurely
+        // Re-stream parsed JSON safely
         if (req.body && Object.keys(req.body).length > 0) {
             const bodyData = JSON.stringify(req.body);
             req.headers['content-length'] = Buffer.byteLength(bodyData);
@@ -157,14 +157,9 @@ app.use((req, res, next) => {
     next();
 });
 
-proxy.on('proxyReq', function (proxyReq, req, res, options) {
-    if (req.body && Object.keys(req.body).length > 0) {
-        proxyReq.setHeader('Content-Type', 'application/json');
-    }
-});
-
+// 🌟 FIX: Safely bind inbound response cookies only if headers aren't flushed yet
 proxy.on('proxyRes', function (proxyRes, req, res) {
-    if (proxyRes.headers['set-cookie']) {
+    if (proxyRes.headers['set-cookie'] && !res.headersSent) {
         res.setHeader('Set-Cookie', proxyRes.headers['set-cookie']);
     }
 });
