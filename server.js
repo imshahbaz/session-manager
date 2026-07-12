@@ -149,10 +149,11 @@ proxy.on('proxyReq', function (proxyReq, req, res, options) {
     }
 });
 
-// 🌟 FIX: Global Inbound Response Handler (Ensures phone receives auth session cookies)
 proxy.on('proxyRes', function (proxyRes, req, res) {
     if (proxyRes.headers['set-cookie']) {
-        res.setHeader('Set-Cookie', proxyRes.headers['set-cookie']);
+        proxyRes.headers['set-cookie'] = proxyRes.headers['set-cookie'].map(cookie =>
+            cookie.replace(/Domain=[^;]+;?\s*/gi, '')
+        );
     }
 });
 
