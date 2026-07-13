@@ -1,25 +1,21 @@
-# --- Step 1: Compile the fast Go binary using a modern Go release ---
-FROM golang:alpine AS builder
+# Builder stage
+FROM golang:1.24 AS builder
 WORKDIR /app
 
-# Copy dependency records first to leverage Docker caching layers
 COPY go.mod ./
 RUN go mod download
 
-# Copy the source code and build a highly optimized stripped binary
-COPY main.go ./
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o gateway main.go
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o gateway .
 
-# --- Step 2: Package into a tiny, secure runtime container ---
+# Runtime stage
 FROM alpine:latest
-WORKDIR /app
-
-# Install basic security certificates so the proxy can talk to HTTPS backends safely
 RUN apk --no-cache add ca-certificates
-
-# Copy only the compiled execution binary from the builder layer
+WORKDIR /root/
 COPY --from=builder /app/gateway .
 
-# Expose port and run
-EXPOSE 8080
+ENV PORT=8080
+ENV JAVA_BACKEND_URL=http://127.0.0.1:8080
+
+EXPOSE ${PORT}
 CMD ["./gateway"]

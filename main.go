@@ -1,109 +1,207 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"strings"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
-var (
-	javaBackendURL  *url.URL
-	excludedLogURIs = map[string]bool{
-		"/api/health": true, // Add any other endpoints you want to skip logging for
-	}
-)
+type Config struct {
+	BackendURL string
+	Port       string
+}
 
-func main() {
-	// 1. Load configuration from Environment Variables
-	backendStr := os.Getenv("JAVA_BACKEND_URL")
-	if backendStr == "" {
-		backendStr = "http://127.0.0.1:8080" // Fallback local default
+func loadConfig() Config {
+	backendURL := os.Getenv("JAVA_BACKEND_URL")
+	if backendURL == "" {
+		backendURL = "http://127.0.0.1:8080"
 	}
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-
-	var err error
-	javaBackendURL, err = url.Parse(strings.TrimSuffix(backendStr, "/"))
-	if err != nil {
-		log.Fatalf("❌ Invalid JAVA_BACKEND_URL configuration: %v", err)
+	return Config{
+		BackendURL: backendURL,
+		Port:       port,
 	}
+}
 
-	// 2. Build the Reverse Proxy engine
-	proxy := httputil.NewSingleHostReverseProxy(javaBackendURL)
-
-	// Fix header issues across cloud platforms (Like Koyeb changing domains)
-	proxy.Director = func(req *http.Request) {
-		req.Header.Add("X-Forwarded-Host", req.Host)
-		req.Header.Add("X-Origin-Host", req.Host)
-		req.URL.Scheme = javaBackendURL.Scheme
-		req.URL.Host = javaBackendURL.Host
-		req.Host = javaBackendURL.Host // Equivalent to changeOrigin: true
+func createTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          500,
+		MaxIdleConnsPerHost:   200,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
 	}
+}
 
-	// 3. Set up custom routing and logging middleware
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Passthrough reverse routing check
-		if strings.HasPrefix(r.URL.Path, "/api") {
-			startTime := time.Now()
+func createReverseProxy(targetURL *url.URL) *httputil.ReverseProxy {
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(targetURL)
+			pr.SetXForwarded() // Automatically sets X-Forwarded-For, X-Forwarded-Host, X-Forwarded-Proto
 
-			// 🌟 FIX: Handle JSON payloads cleanly without breaking network streams
-			if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodDelete {
-				bodyBytes, err := io.ReadAll(r.Body)
-				if err == nil && len(bodyBytes) > 0 {
-					// Verify it is JSON structure (optional, but prevents structural drops)
-					var js json.RawMessage
-					if json.Unmarshal(bodyBytes, &js) == nil {
-						r.Header.Set("Content-Type", "application/json")
-					}
-					// Re-populate the read closer stream smoothly
-					r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			// Extract Client IP
+			clientIP, _, err := net.SplitHostPort(pr.In.RemoteAddr)
+			if err == nil {
+				if pr.In.Header.Get("X-Real-IP") == "" {
+					pr.Out.Header.Set("X-Real-IP", clientIP)
+				}
+			} else {
+				if pr.In.Header.Get("X-Real-IP") == "" {
+					pr.Out.Header.Set("X-Real-IP", pr.In.RemoteAddr)
 				}
 			}
+		},
+		Transport: createTransport(),
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("[Proxy Error] %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
 
-			// Capture status logging via a custom interceptor wrapper
-			lrw := &loggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-
-			// Forward request down the wire to the Spring Boot VPS
-			proxy.ServeHTTP(lrw, r)
-
-			// Clean, fast logging console printout
-			duration := time.Since(startTime)
-			cleanPath := strings.Split(r.URL.Path, "?")[0]
-			if !excludedLogURIs[cleanPath] && !strings.HasPrefix(cleanPath, "/static/") && !strings.HasSuffix(cleanPath, ".ico") {
-				log.Printf("[%s] %d | %v | %s", r.Method, lrw.statusCode, duration, r.URL.String())
+			resp := map[string]interface{}{
+				"success": false,
+				"message": "Backend unavailable",
 			}
-			return
+			json.NewEncoder(w).Encode(resp)
+		},
+	}
+	return proxy
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+
+		next.ServeHTTP(rw, r)
+
+		duration := time.Since(start)
+		clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			clientIP = r.RemoteAddr
 		}
 
-		// Fallback route handler (404)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Route not found on Go Gateway"})
+		log.Printf("timestamp=%s method=%s path=%s status=%d duration=%s client_ip=%s",
+			time.Now().Format(time.RFC3339),
+			r.Method,
+			r.URL.Path,
+			rw.status,
+			duration,
+			clientIP,
+		)
+	})
+}
+
+func RecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("[Panic Recovered] %v", err)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"success":false,"message":"Internal Server Error"}`))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"UP"}`))
+}
+
+func main() {
+	config := loadConfig()
+
+	targetURL, err := url.Parse(config.BackendURL)
+	if err != nil {
+		log.Fatalf("Invalid JAVA_BACKEND_URL: %v", err)
+	}
+
+	proxy := createReverseProxy(targetURL)
+
+	mux := http.NewServeMux()
+
+	// Exact match for health endpoint
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" && r.Method == http.MethodGet {
+			healthHandler(w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
 	})
 
-	log.Printf("Session manager active on port %s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+	// Proxy all other requests
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeHTTP(w, r)
+	})
+
+	handler := RecoveryMiddleware(LoggingMiddleware(mux))
+
+	// WriteTimeout and ReadTimeout are set to 0 (no timeout) to allow >10GB uploads/downloads and streaming (SSE/WS).
+	// ReadHeaderTimeout is set to prevent slowloris attacks.
+	server := &http.Server{
+		Addr:              ":" + config.Port,
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MB
 	}
-}
 
-// Custom wrapper to catch status codes out of the proxy worker loop
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
 
-func (lrw *loggingResponseWriter) WriteHeader(code int) {
-	lrw.statusCode = code
-	lrw.ResponseWriter.WriteHeader(code)
+	go func() {
+		log.Printf("Starting reverse proxy on port %s, forwarding to %s", config.Port, config.BackendURL)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	<-stopChan
+	log.Println("Shutting down gracefully...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Graceful shutdown failed: %v", err)
+	}
+
+	log.Println("Server stopped")
 }

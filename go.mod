@@ -1,3 +1,3 @@
-module 1klik-gateway
+module github.com/user/gateway
 
-go 1.25.5
+go 1.24
